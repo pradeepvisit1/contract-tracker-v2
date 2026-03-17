@@ -304,58 +304,70 @@ async function signInGoogle(silent=false){
 }
 
 async function fetchUserInfo(){
-  try{
-    const r=await gapi.client.request({path:'https://www.googleapis.com/oauth2/v2/userinfo'});
-    CU=r.result;
-    localStorage.setItem('cl_user',JSON.stringify(CU));
-    localStorage.setItem('cl_gtoken','1'); // mark as logged in for auto-login next time
-    const av=document.getElementById('user-avatar');
-    if(CU.picture){av.src=CU.picture;av.style.display='block'}
-  }catch(e){const s=localStorage.getItem('cl_user');if(s)CU=JSON.parse(s)}
+  try{const r=await gapi.client.request({path:'https://www.googleapis.com/oauth2/v2/userinfo'});CU=r.result;localStorage.setItem('cl_user',JSON.stringify(CU));const av=document.getElementById('user-avatar');if(CU.picture){av.src=CU.picture;av.style.display='block'}}catch(e){const s=localStorage.getItem('cl_user');if(s)CU=JSON.parse(s)}
 }
 
-function showUserMenu(){if(!CU)return;if(confirm(`Signed in as: ${CU.name||CU.email}\n\nSign out?`)){gapi.client.setToken(null);localStorage.removeItem('cl_gtoken');localStorage.removeItem('cl_fid');localStorage.removeItem('cl_user');location.reload()}}
+function showUserMenu(){if(!CU)return;if(confirm(`Signed in as: ${CU.name||CU.email}\n\nSign out?`)){gapi.client.setToken(null);localStorage.removeItem('cl_gtoken');location.reload()}}
 
 // ============================================
-// DRIVE OPERATIONS
+// DRIVE OPERATIONS  
 // ============================================
+function log(msg,data){
+  const t=new Date().toLocaleTimeString();
+  console.log(`[CL ${t}] ${msg}`, data!==undefined?data:'');
+  // Also show in UI sync bar for visibility
+  if(msg.startsWith('ERROR')){setSS('error',msg.slice(0,60))}
+}
 
-// BUG FIX 1: persist FID in localStorage so new devices don't lose it
-function saveFID(id){FID=id;localStorage.setItem('cl_fid',id)}
-function loadFID(){const f=localStorage.getItem('cl_fid');if(f)FID=f;return FID}
+function saveFID(id){FID=id;localStorage.setItem('cl_fid',id);log('FID saved',id)}
+function loadFID(){const f=localStorage.getItem('cl_fid');if(f){FID=f;log('FID loaded from cache',f)}return FID}
 
 async function findOrCreate(){
+  log('findOrCreate: searching Drive for '+FILENAME);
   try{
-    // BUG FIX 2: always search Drive fresh — don't rely on cached FID for discovery
+    const token=gapi.client.getToken()?.access_token;
+    log('findOrCreate: token exists?', !!token);
     const r=await gapi.client.drive.files.list({spaces:'appDataFolder',fields:'files(id,name)',q:`name='${FILENAME}'`});
-    if(r.result.files.length){saveFID(r.result.files[0].id);return FID}
-    // File doesn't exist yet — create it
+    log('findOrCreate: files found', r.result.files.length);
+    if(r.result.files.length){
+      saveFID(r.result.files[0].id);
+      log('findOrCreate: using existing file', FID);
+      return FID;
+    }
+    log('findOrCreate: no file found, creating new one...');
     const c=await gapi.client.drive.files.create({resource:{name:FILENAME,parents:['appDataFolder']},fields:'id'});
-    saveFID(c.result.id);return FID
-  }catch(e){console.error('findOrCreate',e);return null}
+    saveFID(c.result.id);
+    log('findOrCreate: created new file', FID);
+    return FID;
+  }catch(e){log('ERROR findOrCreate',e.message||e);return null}
 }
 
 async function loadDrive(){
+  log('loadDrive: starting...');
   try{
     await findOrCreate();
-    if(!FID)return false;
-    // Use native fetch with Bearer token — most reliable way to read Drive file content
-    // gapi's alt:media often returns empty object; fetch() always returns raw text
+    if(!FID){log('ERROR loadDrive: FID is null after findOrCreate');return false}
     const token=gapi.client.getToken()?.access_token;
-    if(!token)return false;
+    if(!token){log('ERROR loadDrive: no access token');return false}
+    log('loadDrive: fetching file content, FID='+FID);
     const resp=await fetch(
       `https://www.googleapis.com/drive/v3/files/${FID}?alt=media`,
       {headers:{Authorization:`Bearer ${token}`}}
     );
-    if(resp.status===404){FID=null;localStorage.removeItem('cl_fid');return false}
-    if(!resp.ok){console.error('loadDrive HTTP',resp.status);return false}
+    log('loadDrive: HTTP status', resp.status);
+    if(resp.status===404){FID=null;localStorage.removeItem('cl_fid');log('ERROR loadDrive: 404 file not found');return false}
+    if(!resp.ok){log('ERROR loadDrive: HTTP error '+resp.status);return false}
     const text=await resp.text();
-    if(!text||text.trim()==='')return false;
+    log('loadDrive: response length', text.length);
+    log('loadDrive: first 100 chars', text.slice(0,100));
+    if(!text||text.trim()===''){log('ERROR loadDrive: empty response');return false}
     let data;
-    try{data=JSON.parse(text)}catch(e){console.error('loadDrive parse',e);return false}
-    if(data&&data.projects){AD=data;saveLocal();return true}
+    try{data=JSON.parse(text)}catch(e){log('ERROR loadDrive: JSON parse failed',e.message);return false}
+    log('loadDrive: parsed OK, projects count', data?.projects?.length);
+    if(data&&data.projects){AD=data;saveLocal();log('loadDrive: SUCCESS ✅');return true}
+    log('ERROR loadDrive: data has no projects field', Object.keys(data||{}));
     return false
-  }catch(e){console.error('loadDrive',e);return false}
+  }catch(e){log('ERROR loadDrive exception',e.message||e);return false}
 }
 
 async function saveDrive(){
@@ -402,21 +414,23 @@ async function pullIfNewer(){
 }
 
 async function doInitialSync(){
+  log('doInitialSync: started');
   setSS('syncing','Loading data...');
-  // Save token flag so auto-login works on next visit
-  localStorage.setItem('cl_gtoken','1');
+  localStorage.setItem('cl_gtoken','1'); // mark logged in for auto-login
   showApp();
   loadFID();
+  log('doInitialSync: calling loadDrive...');
   const ok=await loadDrive();
+  log('doInitialSync: loadDrive returned =>', ok);
   if(!ok){
-    // Drive file is empty/new AND local has no data either — safe to init
     const hasLocalData = AD.projects && AD.projects.length > 0;
+    log('doInitialSync: hasLocalData =>', hasLocalData);
     if(!hasLocalData){
-      // Truly first time ever — create empty file on Drive
+      log('doInitialSync: truly first time — creating empty Drive file');
       await saveDrive();
     } else {
-      // Had local data but Drive load failed — don't overwrite, just show local
-      setSS('error','Could not load from Drive — showing local data');
+      log('ERROR: Drive load failed but local data exists — NOT overwriting Drive');
+      setSS('error','Drive load failed — tap 🔄 to retry');
     }
   }
   refreshAll();
