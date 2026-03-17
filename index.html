@@ -254,8 +254,8 @@
 // ============================================
 // CONFIG — fill these in (see README)
 // ============================================
-const CLIENT_ID = '455931798055-ifi9dukkd1ojug0sug9dsaq3ros9ucer.apps.googleusercontent.com';
-const API_KEY   = 'AIzaSyDID-3DOXXbfpEn-J-OateYFr2q63d_Iqk';
+const CLIENT_ID = 'YOUR_CLIENT_ID_HERE.apps.googleusercontent.com';
+const API_KEY   = 'YOUR_API_KEY_HERE';
 const SCOPE     = 'https://www.googleapis.com/auth/drive.appdata';
 const FILENAME  = 'contractledger_sync.json';
 
@@ -312,23 +312,42 @@ function showUserMenu(){if(!CU)return;if(confirm(`Signed in as: ${CU.name||CU.em
 // ============================================
 // DRIVE OPERATIONS
 // ============================================
+
+// BUG FIX 1: persist FID in localStorage so new devices don't lose it
+function saveFID(id){FID=id;localStorage.setItem('cl_fid',id)}
+function loadFID(){const f=localStorage.getItem('cl_fid');if(f)FID=f;return FID}
+
 async function findOrCreate(){
   try{
+    // BUG FIX 2: always search Drive fresh — don't rely on cached FID for discovery
     const r=await gapi.client.drive.files.list({spaces:'appDataFolder',fields:'files(id,name)',q:`name='${FILENAME}'`});
-    if(r.result.files.length){FID=r.result.files[0].id;return FID}
+    if(r.result.files.length){saveFID(r.result.files[0].id);return FID}
+    // File doesn't exist yet — create it
     const c=await gapi.client.drive.files.create({resource:{name:FILENAME,parents:['appDataFolder']},fields:'id'});
-    FID=c.result.id;return FID
+    saveFID(c.result.id);return FID
   }catch(e){console.error('findOrCreate',e);return null}
 }
 
 async function loadDrive(){
   try{
-    if(!FID)await findOrCreate();if(!FID)return false;
+    // Always do a fresh findOrCreate so new devices discover the file
+    await findOrCreate();
+    if(!FID)return false;
     const r=await gapi.client.drive.files.get({fileId:FID,alt:'media'});
-    const data=typeof r.result==='string'?JSON.parse(r.result):r.result;
+    // BUG FIX 3: gapi sometimes returns result as object directly, sometimes as string
+    let data=r.result;
+    if(typeof data==='string'){try{data=JSON.parse(data)}catch(e){return false}}
+    // Also handle body field for some gapi versions
+    if(!data||!data.projects){
+      const body=r.body||r.result?.body;
+      if(body){try{data=JSON.parse(body)}catch(e){}}
+    }
     if(data&&data.projects){AD=data;saveLocal();return true}
     return false
-  }catch(e){if(e.status===404){FID=null}console.error('loadDrive',e);return false}
+  }catch(e){
+    if(e.status===404){FID=null;localStorage.removeItem('cl_fid')}
+    console.error('loadDrive',e);return false
+  }
 }
 
 async function saveDrive(){
@@ -336,8 +355,16 @@ async function saveDrive(){
   try{
     IS=true;setSS('syncing','Saving...');
     if(!FID)await findOrCreate();
+    if(!FID){IS=false;setSS('error','Could not find Drive file');return false}
     AD.lastModified=new Date().toISOString();AD.modifiedBy=CU?.email||'user';
-    await gapi.client.request({path:`https://www.googleapis.com/upload/drive/v3/files/${FID}?uploadType=media`,method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(AD)});
+    // Use multipart upload for reliability
+    const body=JSON.stringify(AD);
+    await gapi.client.request({
+      path:`https://www.googleapis.com/upload/drive/v3/files/${FID}?uploadType=media`,
+      method:'PATCH',
+      headers:{'Content-Type':'application/json','Content-Length':body.length},
+      body
+    });
     saveLocal();IS=false;
     setSS('synced','Synced · '+new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}));
     return true
@@ -345,15 +372,38 @@ async function saveDrive(){
 }
 
 async function pullIfNewer(){
-  if(!gapi.client.getToken()||IS||!FID)return;
+  if(!gapi.client.getToken()||IS)return;
+  // BUG FIX 4: if FID missing, re-discover instead of skipping
+  if(!FID){await findOrCreate();if(!FID)return}
   try{
     const r=await gapi.client.drive.files.get({fileId:FID,fields:'modifiedTime'});
-    const remote=new Date(r.result.modifiedTime),local=AD.lastModified?new Date(AD.lastModified):new Date(0);
-    if(remote>local){setSS('syncing','Updating...');await loadDrive();refreshAll();setSS('synced','Updated · '+new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}));toast('🔄 New data from cloud')}
-  }catch(e){}
+    const remote=new Date(r.result.modifiedTime);
+    const local=AD.lastModified?new Date(AD.lastModified):new Date(0);
+    if(remote>local){
+      setSS('syncing','Updating...');
+      await loadDrive();
+      refreshAll();
+      setSS('synced','Updated · '+new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}));
+      toast('🔄 New data loaded')
+    }
+  }catch(e){console.error('pullIfNewer',e)}
 }
 
-async function doInitialSync(){setSS('syncing','Loading...');showApp();const ok=await loadDrive();if(!ok)await saveDrive();refreshAll();setSS('synced','Synced');setInterval(pullIfNewer,30000)}
+async function doInitialSync(){
+  setSS('syncing','Loading data...');
+  showApp();
+  // Load cached FID first (speeds up discovery on returning devices)
+  loadFID();
+  const ok=await loadDrive();
+  if(!ok){
+    // First time on this device/account — push empty scaffold
+    await saveDrive();
+  }
+  refreshAll();
+  setSS('synced','Synced · '+new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}));
+  // Poll every 20 seconds for updates from other users
+  setInterval(pullIfNewer,20000);
+}
 
 async function manualSync(){
   if(SYNC_MODE==='local'){toast('Local mode — no sync');return}
