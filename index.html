@@ -254,8 +254,8 @@
 // ============================================
 // CONFIG — fill these in (see README)
 // ============================================
-const CLIENT_ID = '455931798055-ifi9dukkd1ojug0sug9dsaq3ros9ucer.apps.googleusercontent.com';
-const API_KEY   = 'AIzaSyDID-3DOXXbfpEn-J-OateYFr2q63d_Iqk';
+const CLIENT_ID = 'YOUR_CLIENT_ID_HERE.apps.googleusercontent.com';
+const API_KEY   = 'YOUR_API_KEY_HERE';
 const SCOPE     = 'https://www.googleapis.com/auth/drive.appdata';
 const FILENAME  = 'contractledger_sync.json';
 
@@ -330,24 +330,25 @@ async function findOrCreate(){
 
 async function loadDrive(){
   try{
-    // Always do a fresh findOrCreate so new devices discover the file
     await findOrCreate();
     if(!FID)return false;
-    const r=await gapi.client.drive.files.get({fileId:FID,alt:'media'});
-    // BUG FIX 3: gapi sometimes returns result as object directly, sometimes as string
-    let data=r.result;
-    if(typeof data==='string'){try{data=JSON.parse(data)}catch(e){return false}}
-    // Also handle body field for some gapi versions
-    if(!data||!data.projects){
-      const body=r.body||r.result?.body;
-      if(body){try{data=JSON.parse(body)}catch(e){}}
-    }
+    // Use native fetch with Bearer token — most reliable way to read Drive file content
+    // gapi's alt:media often returns empty object; fetch() always returns raw text
+    const token=gapi.client.getToken()?.access_token;
+    if(!token)return false;
+    const resp=await fetch(
+      `https://www.googleapis.com/drive/v3/files/${FID}?alt=media`,
+      {headers:{Authorization:`Bearer ${token}`}}
+    );
+    if(resp.status===404){FID=null;localStorage.removeItem('cl_fid');return false}
+    if(!resp.ok){console.error('loadDrive HTTP',resp.status);return false}
+    const text=await resp.text();
+    if(!text||text.trim()==='')return false;
+    let data;
+    try{data=JSON.parse(text)}catch(e){console.error('loadDrive parse',e);return false}
     if(data&&data.projects){AD=data;saveLocal();return true}
     return false
-  }catch(e){
-    if(e.status===404){FID=null;localStorage.removeItem('cl_fid')}
-    console.error('loadDrive',e);return false
-  }
+  }catch(e){console.error('loadDrive',e);return false}
 }
 
 async function saveDrive(){
@@ -373,18 +374,22 @@ async function saveDrive(){
 
 async function pullIfNewer(){
   if(!gapi.client.getToken()||IS)return;
-  // BUG FIX 4: if FID missing, re-discover instead of skipping
   if(!FID){await findOrCreate();if(!FID)return}
   try{
-    const r=await gapi.client.drive.files.get({fileId:FID,fields:'modifiedTime'});
-    const remote=new Date(r.result.modifiedTime);
+    const token=gapi.client.getToken()?.access_token;
+    // Get file metadata (modifiedTime) to check if Drive is newer than local
+    const resp=await fetch(
+      `https://www.googleapis.com/drive/v3/files/${FID}?fields=modifiedTime`,
+      {headers:{Authorization:`Bearer ${token}`}}
+    );
+    if(!resp.ok)return;
+    const meta=await resp.json();
+    const remote=new Date(meta.modifiedTime);
     const local=AD.lastModified?new Date(AD.lastModified):new Date(0);
     if(remote>local){
       setSS('syncing','Updating...');
-      await loadDrive();
-      refreshAll();
-      setSS('synced','Updated · '+new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}));
-      toast('🔄 New data loaded')
+      const ok=await loadDrive();
+      if(ok){refreshAll();setSS('synced','Updated · '+new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}));toast('🔄 New data loaded')}
     }
   }catch(e){console.error('pullIfNewer',e)}
 }
