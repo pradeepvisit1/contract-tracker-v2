@@ -1,0 +1,152 @@
+# ContractLedger v2 — Google Drive Sync Setup
+# Takes about 10 minutes. Free forever.
+
+================================================
+STEP 1 — Create Google Cloud Project
+================================================
+
+1. Go to: https://console.cloud.google.com
+2. Click "Select a project" (top bar) → "New Project"
+3. Name it: ContractLedger
+4. Click "Create"
+
+================================================
+STEP 2 — Enable Google Drive API
+================================================
+
+1. In Cloud Console → Left menu → "APIs & Services" → "Library"
+2. Search for "Google Drive API"
+3. Click it → Click "Enable"
+
+================================================
+STEP 3 — Create API Key
+================================================
+
+1. Left menu → "APIs & Services" → "Credentials"
+2. Click "+ Create Credentials" → "API Key"
+3. Copy the key (looks like: AIzaSyXXXXXXXXXXXXXXXXX)
+4. Click "Edit API Key" → restrict to "Google Drive API" only
+5. SAVE this key — you'll need it in Step 6
+
+================================================
+STEP 4 — Create OAuth Client ID
+================================================
+
+1. Same "Credentials" page → "+ Create Credentials" → "OAuth Client ID"
+2. If asked: Configure consent screen first:
+   - User Type: External
+   - App name: ContractLedger
+   - User support email: your email
+   - Developer contact: your email
+   - Save and continue (skip all optional fields)
+   - Add scope: search "drive.appdata" → add it
+   - Back to Credentials
+
+3. Create OAuth Client ID:
+   - Application type: Web application
+   - Name: ContractLedger
+   - Authorized JavaScript origins: ADD BOTH:
+     * https://YOUR-SITE.netlify.app    ← your Netlify URL
+     * http://localhost:8080            ← for local testing
+   - Authorized redirect URIs: same URLs
+   - Click Create
+
+4. Copy the Client ID (looks like: 123456-xxxx.apps.googleusercontent.com)
+
+================================================
+STEP 5 — Add Test Users (IMPORTANT!)
+================================================
+
+Until your app is verified by Google, only approved users can sign in.
+
+1. Left menu → "APIs & Services" → "OAuth Consent Screen"
+2. Scroll to "Test users" → "Add Users"
+3. Add ALL 5 email addresses of your users
+4. Save
+
+(For production: you can publish the app later, which removes this limit)
+
+================================================
+STEP 6 — Update index.html
+================================================
+
+Open index.html and find these 2 lines near the top of the <script> section:
+
+  const CLIENT_ID = 'YOUR_CLIENT_ID_HERE.apps.googleusercontent.com';
+  const API_KEY   = 'YOUR_API_KEY_HERE';
+
+Replace them with your actual values:
+
+  const CLIENT_ID = '123456789-abcdefgh.apps.googleusercontent.com';
+  const API_KEY   = 'AIzaSyXXXXXXXXXXXXXXXXXXXXX';
+
+Save the file.
+
+================================================
+STEP 7 — Redeploy to Netlify
+================================================
+
+Option A — Drag & Drop (easiest):
+1. Go to app.netlify.com → your site
+2. Click "Deploys" tab
+3. Drag your updated contract-tracker-v2 folder into the deploy box
+4. Done! New version goes live in 30 seconds
+
+Option B — GitHub (if linked):
+1. Upload updated index.html to your GitHub repo
+2. Netlify auto-deploys in 1-2 minutes
+
+================================================
+STEP 8 — Test Sync
+================================================
+
+1. Open your Netlify URL on Phone 1
+2. Sign in with Google → Add a test expense
+3. Open same URL on Phone 2 → Sign in with Google
+4. Should see the same expense automatically ✅
+5. If not — tap the 🔄 sync button
+
+================================================
+HOW SYNC WORKS
+================================================
+
+- Each save auto-syncs to Google Drive within 1.5 seconds
+- App polls every 30 seconds for updates from other users
+- Works offline: saves locally, syncs when internet returns
+- The 🔄 button forces immediate sync
+- All data in Drive → "AppData" folder (hidden, private)
+
+================================================
+TROUBLESHOOTING
+================================================
+
+"Sign in failed" or "access denied"?
+→ Check: did you add the user's email in Test Users? (Step 5)
+→ Check: is the Netlify URL in Authorized Origins? (Step 4)
+
+Data not syncing to other devices?
+→ Tap 🔄 sync button manually
+→ Check internet connection
+→ Make sure all users sign in with Google (not local mode)
+
+"This app isn't verified" warning?
+→ Click "Advanced" → "Go to ContractLedger (unsafe)"
+→ This is normal for apps not yet published to Google
+
+================================================
+COST
+================================================
+
+Google Drive API: FREE
+- 1 billion API calls/day free quota
+- Your data stored in users' own Google Drive
+- No server costs, no database costs
+
+================================================
+SECURITY NOTES
+================================================
+
+- Data stored in user's own Google Drive (AppData folder)
+- Not visible in regular Drive — only your app can access it
+- 256-bit SSL encryption in transit
+- Only users you add in "Test Users" can access data
