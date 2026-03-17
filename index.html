@@ -304,10 +304,17 @@ async function signInGoogle(silent=false){
 }
 
 async function fetchUserInfo(){
-  try{const r=await gapi.client.request({path:'https://www.googleapis.com/oauth2/v2/userinfo'});CU=r.result;localStorage.setItem('cl_user',JSON.stringify(CU));const av=document.getElementById('user-avatar');if(CU.picture){av.src=CU.picture;av.style.display='block'}}catch(e){const s=localStorage.getItem('cl_user');if(s)CU=JSON.parse(s)}
+  try{
+    const r=await gapi.client.request({path:'https://www.googleapis.com/oauth2/v2/userinfo'});
+    CU=r.result;
+    localStorage.setItem('cl_user',JSON.stringify(CU));
+    localStorage.setItem('cl_gtoken','1'); // mark as logged in for auto-login next time
+    const av=document.getElementById('user-avatar');
+    if(CU.picture){av.src=CU.picture;av.style.display='block'}
+  }catch(e){const s=localStorage.getItem('cl_user');if(s)CU=JSON.parse(s)}
 }
 
-function showUserMenu(){if(!CU)return;if(confirm(`Signed in as: ${CU.name||CU.email}\n\nSign out?`)){gapi.client.setToken(null);localStorage.removeItem('cl_gtoken');location.reload()}}
+function showUserMenu(){if(!CU)return;if(confirm(`Signed in as: ${CU.name||CU.email}\n\nSign out?`)){gapi.client.setToken(null);localStorage.removeItem('cl_gtoken');localStorage.removeItem('cl_fid');localStorage.removeItem('cl_user');location.reload()}}
 
 // ============================================
 // DRIVE OPERATIONS
@@ -396,17 +403,24 @@ async function pullIfNewer(){
 
 async function doInitialSync(){
   setSS('syncing','Loading data...');
+  // Save token flag so auto-login works on next visit
+  localStorage.setItem('cl_gtoken','1');
   showApp();
-  // Load cached FID first (speeds up discovery on returning devices)
   loadFID();
   const ok=await loadDrive();
   if(!ok){
-    // First time on this device/account — push empty scaffold
-    await saveDrive();
+    // Drive file is empty/new AND local has no data either — safe to init
+    const hasLocalData = AD.projects && AD.projects.length > 0;
+    if(!hasLocalData){
+      // Truly first time ever — create empty file on Drive
+      await saveDrive();
+    } else {
+      // Had local data but Drive load failed — don't overwrite, just show local
+      setSS('error','Could not load from Drive — showing local data');
+    }
   }
   refreshAll();
   setSS('synced','Synced · '+new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}));
-  // Poll every 20 seconds for updates from other users
   setInterval(pullIfNewer,20000);
 }
 
